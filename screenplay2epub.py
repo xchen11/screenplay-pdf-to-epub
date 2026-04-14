@@ -652,6 +652,7 @@ def main() -> int:
         if maybe is not None:
             classified.append(maybe)
     merged = merge_same_kind(classified)
+    metadata_lines = merged[:]
     merged = exclude_title_page_lines(merged, title_page_lines)
 
     if args.debug_lines:
@@ -661,7 +662,7 @@ def main() -> int:
                 file=sys.stderr,
             )
 
-    title, author = infer_metadata(merged, args.input_pdf, args.title, args.author)
+    title, author = infer_metadata(metadata_lines, args.input_pdf, args.title, args.author)
     blocks = build_blocks(merged)
     title_page_xhtml = render_title_page_xhtml(title, title_page_lines) if title_page_lines else None
     xhtml, toc_entries = render_xhtml(title, author, blocks)
