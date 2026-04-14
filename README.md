@@ -51,6 +51,7 @@ The parser reads compressed PDF text streams directly and classifies lines by:
 - simple screenplay markers such as `INT.`, `EXT.`, parentheticals, and `CUT TO:`
 
 The generated EPUB:
+- uses the PDF's first page as a dedicated centered title page when it contains lines before the first scene heading
 - removes page numbers and common continuation markers
 - preserves scene headings
 - builds the EPUB table of contents from detected scene headings such as `INT.`, `EXT.`, `INT./EXT.`, and `I/E.`

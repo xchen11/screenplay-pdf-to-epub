@@ -344,6 +344,25 @@ def build_blocks(lines: List[Line]) -> List[Block]:
     return [block for block in blocks if block.lines or block.speaker]
 
 
+def extract_title_page_lines(lines: List[Line]) -> List[Line]:
+    first_page_lines = [line for line in lines if line.page == 1]
+    if not first_page_lines:
+        return []
+    for idx, line in enumerate(first_page_lines):
+        if is_scene_heading(line.text):
+            return first_page_lines[:idx]
+    return first_page_lines
+
+
+def exclude_title_page_lines(lines: List[Line], title_page_lines: List[Line]) -> List[Line]:
+    if not title_page_lines:
+        return lines
+    title_page_keys = {(line.page, line.x, line.y, line.text) for line in title_page_lines}
+    return [
+        line for line in lines if (line.page, line.x, line.y, line.text) not in title_page_keys
+    ]
+
+
 def infer_metadata(
     lines: List[Line], pdf_path: Path, title_override: Optional[str], author_override: Optional[str]
 ) -> tuple[str, str]:
@@ -375,16 +394,9 @@ def slugify_text(text: str) -> str:
 
 
 def render_xhtml(
-    title: str, author: str, blocks: List[Block], include_frontmatter: bool = True
+    title: str, author: str, blocks: List[Block]
 ) -> tuple[str, List[TocEntry]]:
     body_parts = []
-    if include_frontmatter:
-        body_parts.extend(
-            [
-                f"<h1>{html.escape(title)}</h1>",
-                f'<p class="byline">{html.escape(author)}</p>',
-            ]
-        )
     toc_entries: List[TocEntry] = []
     scene_counts: dict[str, int] = {}
 
@@ -426,6 +438,36 @@ def render_xhtml(
   </body>
 </html>
 """, toc_entries
+
+
+def render_title_page_xhtml(title: str, title_page_lines: List[Line]) -> str:
+    body_parts = []
+    previous_y: Optional[float] = None
+    for line in title_page_lines:
+        margin_top = 0.0
+        if previous_y is not None:
+            gap = max(previous_y - line.y, 0.0)
+            margin_top = min(gap / 18.0, 2.5)
+        body_parts.append(
+            f'<p class="title-line" style="margin-top: {margin_top:.2f}em;">{html.escape(line.text)}</p>'
+        )
+        previous_y = line.y
+
+    body = "\n".join(body_parts)
+    return f"""<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+  <head>
+    <title>{html.escape(title)} Title Page</title>
+    <link rel="stylesheet" type="text/css" href="styles.css"/>
+  </head>
+  <body class="title-page-body">
+    <section class="title-page">
+{textwrap.indent(body, '      ')}
+    </section>
+  </body>
+</html>
+"""
 
 
 def render_cover_xhtml(title: str, cover_href: str) -> str:
@@ -473,6 +515,7 @@ def build_epub(
     output_path: Path,
     title: str,
     author: str,
+    title_page_xhtml: Optional[str],
     xhtml: str,
     toc_entries: List[TocEntry],
     cover_path: Optional[Path] = None,
@@ -488,6 +531,16 @@ h2 { margin-top: 1.8em; margin-bottom: 0.8em; font-size: 1em; letter-spacing: 0.
 .speaker { margin: 0; text-align: center; font-variant: small-caps; font-weight: bold; }
 .parenthetical { margin: 0.15em 0; text-align: center; font-style: italic; }
 .dialogue { margin: 0.15em 12% 0.8em 12%; }
+.title-page-body { margin: 0; }
+.title-page {
+  min-height: 100vh;
+  padding: 8vh 8% 10vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  text-align: center;
+}
+.title-line { margin-bottom: 0; }
 """.strip()
 
     cover_bytes = None
@@ -512,6 +565,12 @@ h2 { margin-top: 1.8em; margin-bottom: 0.8em; font-size: 1em; letter-spacing: 0.
         )
         cover_spine = '    <itemref idref="cover"/>\n'
 
+    title_page_manifest = ""
+    title_page_spine = ""
+    if title_page_xhtml is not None:
+        title_page_manifest = '    <item id="titlepage" href="titlepage.xhtml" media-type="application/xhtml+xml"/>\n'
+        title_page_spine = '    <itemref idref="titlepage"/>\n'
+
     content_opf = f"""<?xml version="1.0" encoding="utf-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid" version="3.0">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -523,12 +582,14 @@ h2 { margin-top: 1.8em; margin-bottom: 0.8em; font-size: 1em; letter-spacing: 0.
   </metadata>
   <manifest>
 {cover_manifest.rstrip()}
+{title_page_manifest.rstrip()}
     <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
     <item id="text" href="text.xhtml" media-type="application/xhtml+xml"/>
     <item id="css" href="styles.css" media-type="text/css"/>
   </manifest>
   <spine>
 {cover_spine.rstrip()}
+{title_page_spine.rstrip()}
     <itemref idref="nav"/>
     <itemref idref="text"/>
   </spine>
@@ -553,6 +614,8 @@ h2 { margin-top: 1.8em; margin-bottom: 0.8em; font-size: 1em; letter-spacing: 0.
         if cover_xhtml is not None and cover_href is not None and cover_bytes is not None:
             archive.writestr("OEBPS/cover.xhtml", cover_xhtml)
             archive.writestr(f"OEBPS/{cover_href}", cover_bytes)
+        if title_page_xhtml is not None:
+            archive.writestr("OEBPS/titlepage.xhtml", title_page_xhtml)
         archive.writestr("OEBPS/nav.xhtml", nav_xhtml)
         archive.writestr("OEBPS/text.xhtml", xhtml)
         archive.writestr("OEBPS/styles.css", styles)
@@ -580,12 +643,16 @@ def main() -> int:
         return 1
 
     lines = group_lines(fragments, line_merge_gap=args.line_merge_gap)
+    title_page_lines = extract_title_page_lines(
+        [line for line in lines if not is_header_or_footer(line, args)]
+    )
     classified = []
     for line in lines:
         maybe = classify_line(line, args)
         if maybe is not None:
             classified.append(maybe)
     merged = merge_same_kind(classified)
+    merged = exclude_title_page_lines(merged, title_page_lines)
 
     if args.debug_lines:
         for line in merged:
@@ -596,8 +663,9 @@ def main() -> int:
 
     title, author = infer_metadata(merged, args.input_pdf, args.title, args.author)
     blocks = build_blocks(merged)
-    xhtml, toc_entries = render_xhtml(title, author, blocks, include_frontmatter=args.cover is None)
-    build_epub(output, title, author, xhtml, toc_entries, args.cover)
+    title_page_xhtml = render_title_page_xhtml(title, title_page_lines) if title_page_lines else None
+    xhtml, toc_entries = render_xhtml(title, author, blocks)
+    build_epub(output, title, author, title_page_xhtml, xhtml, toc_entries, args.cover)
     print(output)
     return 0
 
