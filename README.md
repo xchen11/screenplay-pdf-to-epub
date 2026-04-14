@@ -15,7 +15,21 @@ It is tuned for screenplay layouts with common formatting patterns such as:
 ```bash
 python3 screenplay2epub.py /path/to/script.pdf
 python3 screenplay2epub.py /path/to/script.pdf -o /path/to/script.epub
+python3 screenplay2epub.py /path/to/script.pdf --cover /path/to/cover.jpg
 ```
+
+**Note:** If any part of your file path contains spaces—including parent folders or the file name itself—enclose the entire path in quotes. For example: `python3 screenplay2epub.py "/Users/username/Scripts/My Script Folder/My Script.pdf"`
+
+Metadata and cover overrides:
+
+```bash
+python3 screenplay2epub.py /path/to/script.pdf \
+  --title "My Script" \
+  --author "Writer Name" \
+  --cover /path/to/cover.png
+```
+
+Supported cover formats: JPG, PNG, GIF, WEBP, and SVG.
 
 Useful tuning flags:
 

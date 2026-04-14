@@ -67,6 +67,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--title", help="Override EPUB title")
     parser.add_argument("--author", help="Override EPUB author")
+    parser.add_argument("--cover", type=Path, help="Path to a custom EPUB cover image")
     parser.add_argument("--scene-max-x", type=float, default=130.0)
     parser.add_argument("--dialogue-min-x", type=float, default=165.0)
     parser.add_argument("--parenthetical-min-x", type=float, default=200.0)
@@ -77,6 +78,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--line-merge-gap", type=float, default=8.0)
     parser.add_argument("--debug-lines", action="store_true")
     return parser.parse_args()
+
+
+def detect_cover_format(cover_path: Path) -> tuple[str, str]:
+    data = cover_path.read_bytes()
+    stripped = data.lstrip()
+    if stripped.startswith(b"<?xml"):
+        xml_end = stripped.find(b"?>")
+        if xml_end != -1:
+            stripped = stripped[xml_end + 2 :].lstrip()
+    if stripped.startswith(b"<svg"):
+        return ("image/svg+xml", ".svg")
+    if data.startswith(b"\xff\xd8\xff"):
+        return ("image/jpeg", ".jpg")
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ("image/png", ".png")
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return ("image/gif", ".gif")
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return ("image/webp", ".webp")
+    raise ValueError(
+        "Unsupported cover image format. Use JPG, PNG, GIF, WEBP, or SVG."
+    )
 
 
 def decode_pdf_string(data: bytes) -> str:
@@ -370,7 +393,31 @@ def render_xhtml(title: str, author: str, blocks: List[Block]) -> str:
 """
 
 
-def build_epub(output_path: Path, title: str, author: str, xhtml: str) -> None:
+def render_cover_xhtml(title: str, cover_href: str) -> str:
+    return f"""<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+  <head>
+    <title>{html.escape(title)} Cover</title>
+    <style>
+      body {{ margin: 0; padding: 0; }}
+      img {{ display: block; width: 100%; height: auto; }}
+    </style>
+  </head>
+  <body>
+    <img src="{html.escape(cover_href)}" alt="{html.escape(title)} cover"/>
+  </body>
+</html>
+"""
+
+
+def build_epub(
+    output_path: Path,
+    title: str,
+    author: str,
+    xhtml: str,
+    cover_path: Optional[Path] = None,
+) -> None:
     styles = """
 body { font-family: Georgia, serif; margin: 5%; line-height: 1.4; }
 h1 { text-align: center; margin-bottom: 0.2em; }
@@ -384,6 +431,28 @@ h2 { margin-top: 1.8em; margin-bottom: 0.8em; font-size: 1em; letter-spacing: 0.
 .dialogue { margin: 0.15em 12% 0.8em 12%; }
 """.strip()
 
+    cover_bytes = None
+    cover_href = None
+    cover_media_type = None
+    cover_xhtml = None
+    if cover_path is not None:
+        cover_bytes = cover_path.read_bytes()
+        cover_media_type, cover_extension = detect_cover_format(cover_path)
+        cover_href = f"images/cover{cover_extension}"
+        cover_xhtml = render_cover_xhtml(title, cover_href)
+
+    cover_metadata = ""
+    cover_manifest = ""
+    cover_spine = ""
+    if cover_path is not None and cover_href and cover_media_type:
+        cover_metadata = '    <meta name="cover" content="cover-image"/>\n'
+        cover_manifest = (
+            '    <item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/>\n'
+            f'    <item id="cover-image" href="{html.escape(cover_href)}" '
+            f'media-type="{cover_media_type}" properties="cover-image"/>\n'
+        )
+        cover_spine = '    <itemref idref="cover"/>\n'
+
     content_opf = f"""<?xml version="1.0" encoding="utf-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid" version="3.0">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -391,13 +460,16 @@ h2 { margin-top: 1.8em; margin-bottom: 0.8em; font-size: 1em; letter-spacing: 0.
     <dc:title>{html.escape(title)}</dc:title>
     <dc:creator>{html.escape(author)}</dc:creator>
     <dc:language>en</dc:language>
+{cover_metadata.rstrip()}
   </metadata>
   <manifest>
+{cover_manifest.rstrip()}
     <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
     <item id="text" href="text.xhtml" media-type="application/xhtml+xml"/>
     <item id="css" href="styles.css" media-type="text/css"/>
   </manifest>
   <spine>
+{cover_spine.rstrip()}
     <itemref idref="nav"/>
     <itemref idref="text"/>
   </spine>
@@ -430,6 +502,9 @@ h2 { margin-top: 1.8em; margin-bottom: 0.8em; font-size: 1em; letter-spacing: 0.
         archive.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
         archive.writestr("META-INF/container.xml", container_xml)
         archive.writestr("OEBPS/content.opf", content_opf)
+        if cover_xhtml is not None and cover_href is not None and cover_bytes is not None:
+            archive.writestr("OEBPS/cover.xhtml", cover_xhtml)
+            archive.writestr(f"OEBPS/{cover_href}", cover_bytes)
         archive.writestr("OEBPS/nav.xhtml", nav_xhtml)
         archive.writestr("OEBPS/text.xhtml", xhtml)
         archive.writestr("OEBPS/styles.css", styles)
@@ -440,6 +515,15 @@ def main() -> int:
     if not args.input_pdf.exists():
         print(f"Input PDF not found: {args.input_pdf}", file=sys.stderr)
         return 1
+    if args.cover and not args.cover.exists():
+        print(f"Cover image not found: {args.cover}", file=sys.stderr)
+        return 1
+    if args.cover:
+        try:
+            detect_cover_format(args.cover)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
 
     output = args.output or args.input_pdf.with_suffix(".epub")
     fragments = extract_fragments(args.input_pdf)
@@ -465,7 +549,7 @@ def main() -> int:
     title, author = infer_metadata(merged, args.input_pdf, args.title, args.author)
     blocks = build_blocks(merged)
     xhtml = render_xhtml(title, author, blocks)
-    build_epub(output, title, author, xhtml)
+    build_epub(output, title, author, xhtml, args.cover)
     print(output)
     return 0
 
