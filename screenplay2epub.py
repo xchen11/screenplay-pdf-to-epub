@@ -54,6 +54,12 @@ class Block:
     parenthetical: Optional[str] = None
 
 
+@dataclass
+class TocEntry:
+    href: str
+    label: str
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Convert a text-based screenplay PDF into a readable EPUB."
@@ -147,7 +153,16 @@ def is_scene_heading(text: str) -> bool:
     stripped = text.strip()
     if not stripped:
         return False
-    prefixes = ("INT.", "EXT.", "INT/EXT.", "I/E.", "EST.", "INT ", "EXT ")
+    prefixes = (
+        "INT.",
+        "EXT.",
+        "INT./EXT.",
+        "INT/EXT.",
+        "I/E.",
+        "EST.",
+        "INT ",
+        "EXT ",
+    )
     if stripped.startswith(prefixes):
         return True
     return uppercase_ratio(stripped) > 0.9 and " - " in stripped
@@ -354,15 +369,35 @@ def infer_metadata(
     return title, author
 
 
-def render_xhtml(title: str, author: str, blocks: List[Block]) -> str:
-    body_parts = [
-        f"<h1>{html.escape(title)}</h1>",
-        f'<p class="byline">{html.escape(author)}</p>',
-    ]
+def slugify_text(text: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return slug or "section"
+
+
+def render_xhtml(
+    title: str, author: str, blocks: List[Block], include_frontmatter: bool = True
+) -> tuple[str, List[TocEntry]]:
+    body_parts = []
+    if include_frontmatter:
+        body_parts.extend(
+            [
+                f"<h1>{html.escape(title)}</h1>",
+                f'<p class="byline">{html.escape(author)}</p>',
+            ]
+        )
+    toc_entries: List[TocEntry] = []
+    scene_counts: dict[str, int] = {}
 
     for block in blocks:
         if block.kind == "scene":
-            body_parts.append(f"<h2>{html.escape(block.lines[0].text)}</h2>")
+            scene_text = block.lines[0].text
+            scene_slug = slugify_text(scene_text)
+            scene_counts[scene_slug] = scene_counts.get(scene_slug, 0) + 1
+            scene_id = (
+                scene_slug if scene_counts[scene_slug] == 1 else f"{scene_slug}-{scene_counts[scene_slug]}"
+            )
+            body_parts.append(f'<h2 id="{html.escape(scene_id)}">{html.escape(scene_text)}</h2>')
+            toc_entries.append(TocEntry(href=f"text.xhtml#{scene_id}", label=scene_text))
         elif block.kind == "transition":
             body_parts.append(f'<p class="transition">{html.escape(block.lines[0].text)}</p>')
         elif block.kind == "action":
@@ -390,7 +425,7 @@ def render_xhtml(title: str, author: str, blocks: List[Block]) -> str:
 {textwrap.indent(body, '    ')}
   </body>
 </html>
-"""
+""", toc_entries
 
 
 def render_cover_xhtml(title: str, cover_href: str) -> str:
@@ -411,11 +446,35 @@ def render_cover_xhtml(title: str, cover_href: str) -> str:
 """
 
 
+def render_nav_xhtml(title: str, toc_entries: List[TocEntry]) -> str:
+    toc_items = "\n".join(
+        f'      <li><a href="{html.escape(entry.href)}">{html.escape(entry.label)}</a></li>'
+        for entry in toc_entries
+    )
+    if not toc_items:
+        toc_items = f'      <li><a href="text.xhtml">{html.escape(title)}</a></li>'
+    return f"""<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <head><title>Contents</title></head>
+  <body>
+    <nav epub:type="toc" id="toc">
+      <h1>Contents</h1>
+      <ol>
+{toc_items}
+      </ol>
+    </nav>
+  </body>
+</html>
+"""
+
+
 def build_epub(
     output_path: Path,
     title: str,
     author: str,
     xhtml: str,
+    toc_entries: List[TocEntry],
     cover_path: Optional[Path] = None,
 ) -> None:
     styles = """
@@ -476,18 +535,7 @@ h2 { margin-top: 1.8em; margin-bottom: 0.8em; font-size: 1em; letter-spacing: 0.
 </package>
 """
 
-    nav_xhtml = f"""<?xml version="1.0" encoding="utf-8"?>
-<!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
-  <head><title>Contents</title></head>
-  <body>
-    <nav epub:type="toc" id="toc">
-      <h1>Contents</h1>
-      <ol><li><a href="text.xhtml">{html.escape(title)}</a></li></ol>
-    </nav>
-  </body>
-</html>
-"""
+    nav_xhtml = render_nav_xhtml(title, toc_entries)
 
     container_xml = """<?xml version="1.0" encoding="utf-8"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
@@ -548,8 +596,8 @@ def main() -> int:
 
     title, author = infer_metadata(merged, args.input_pdf, args.title, args.author)
     blocks = build_blocks(merged)
-    xhtml = render_xhtml(title, author, blocks)
-    build_epub(output, title, author, xhtml, args.cover)
+    xhtml, toc_entries = render_xhtml(title, author, blocks, include_frontmatter=args.cover is None)
+    build_epub(output, title, author, xhtml, toc_entries, args.cover)
     print(output)
     return 0
 

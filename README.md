@@ -53,6 +53,7 @@ The parser reads compressed PDF text streams directly and classifies lines by:
 The generated EPUB:
 - removes page numbers and common continuation markers
 - preserves scene headings
+- builds the EPUB table of contents from detected scene headings such as `INT.`, `EXT.`, `INT./EXT.`, and `I/E.`
 - renders action as prose paragraphs
 - renders character and dialogue as readable dialogue blocks
 
