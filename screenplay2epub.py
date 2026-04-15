@@ -82,6 +82,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--header-y-min", type=float, default=735.0)
     parser.add_argument("--footer-y-max", type=float, default=70.0)
     parser.add_argument("--line-merge-gap", type=float, default=8.0)
+    parser.add_argument(
+        "--paragraph-gap-min",
+        type=float,
+        default=18.0,
+        help="Minimum vertical gap that starts a new action/dialogue paragraph",
+    )
     parser.add_argument("--debug-lines", action="store_true")
     return parser.parse_args()
 
@@ -302,15 +308,18 @@ def classify_line(line: Line, args: argparse.Namespace) -> Optional[Line]:
     return line
 
 
-def merge_same_kind(lines: List[Line]) -> List[Line]:
+def merge_same_kind(lines: List[Line], paragraph_gap_min: float) -> List[Line]:
     merged: List[Line] = []
     for line in lines:
+        y_gap = merged[-1].y - line.y if merged and merged[-1].page == line.page else None
         if (
             merged
             and merged[-1].page == line.page
             and merged[-1].kind == line.kind
             and merged[-1].x == line.x
             and merged[-1].kind in {"action", "dialogue"}
+            and y_gap is not None
+            and y_gap < paragraph_gap_min
         ):
             merged[-1].text = normalize_text(f"{merged[-1].text} {line.text}")
             merged[-1].y = min(merged[-1].y, line.y)
@@ -651,7 +660,7 @@ def main() -> int:
         maybe = classify_line(line, args)
         if maybe is not None:
             classified.append(maybe)
-    merged = merge_same_kind(classified)
+    merged = merge_same_kind(classified, args.paragraph_gap_min)
     metadata_lines = merged[:]
     merged = exclude_title_page_lines(merged, title_page_lines)
 
