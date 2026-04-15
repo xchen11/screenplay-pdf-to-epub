@@ -80,7 +80,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--character-min-x", type=float, default=235.0)
     parser.add_argument("--transition-min-x", type=float, default=430.0)
     parser.add_argument("--header-y-min", type=float, default=735.0)
-    parser.add_argument("--footer-y-max", type=float, default=95.0)
+    parser.add_argument("--footer-y-max", type=float, default=70.0)
     parser.add_argument("--line-merge-gap", type=float, default=8.0)
     parser.add_argument("--debug-lines", action="store_true")
     return parser.parse_args()
